@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "name": "stableswap-scout",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm ci",
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
+}

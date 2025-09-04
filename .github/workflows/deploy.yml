@@ -19,16 +19,26 @@ jobs:
         node-version: '22'
         cache: 'npm'
         
-        - name: Install dependencies
-      run: npm install
+    - name: Install dependencies
+      run: npm ci
 
     - name: Build application
       run: npm run build
       env:
         NODE_OPTIONS: --max-old-space-size=4096
         
+    - name: Check Vercel secrets
+      id: check-secrets
+      run: |
+        if [[ -n "${{ secrets.VERCEL_TOKEN }}" && -n "${{ secrets.VERCEL_ORG_ID }}" && -n "${{ secrets.VERCEL_PROJECT_ID }}" ]]; then
+          echo "secrets-available=true" >> $GITHUB_OUTPUT
+        else
+          echo "secrets-available=false" >> $GITHUB_OUTPUT
+          echo "⚠️ Vercel secrets not configured. Skipping deployment."
+        fi
+        
     - name: Deploy to Vercel (Production)
-      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      if: steps.check-secrets.outputs.secrets-available == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
       uses: amondnet/vercel-action@v25
       with:
         vercel-token: ${{ secrets.VERCEL_TOKEN }}
@@ -37,7 +47,7 @@ jobs:
         vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
         
     - name: Deploy to Vercel (Preview)
-      if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
+      if: steps.check-secrets.outputs.secrets-available == 'true' && github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
       uses: amondnet/vercel-action@v25
       with:
         vercel-token: ${{ secrets.VERCEL_TOKEN }}
@@ -45,24 +55,56 @@ jobs:
         vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
         vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
         
+    - name: Build Success Notification
+      if: steps.check-secrets.outputs.secrets-available == 'false'
+      run: |
+        echo "✅ Build completed successfully!"
+        echo "📦 Application built and ready for deployment"
+        echo "ℹ️  To enable Vercel deployment, configure the following repository secrets:"
+        echo "   - VERCEL_TOKEN"
+        echo "   - VERCEL_ORG_ID" 
+        echo "   - VERCEL_PROJECT_ID"
+        
     - name: Comment PR with deployment URL
-      if: github.event_name == 'pull_request'
+      if: github.event_name == 'pull_request' && steps.check-secrets.outputs.secrets-available == 'true'
       uses: actions/github-script@v7
       with:
         script: |
-          const { data: deployments } = await github.rest.repos.listDeployments({
-            owner: context.repo.owner,
-            repo: context.repo.repo
-          });
-          const latestDeployment = deployments[0];
-          if (latestDeployment) {
-            const deploymentUrl = `https://${latestDeployment.environment}.vercel.app`;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
+          try {
+            const { data: deployments } = await github.rest.repos.listDeployments({
               owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `🚀 **Preview Deployment Ready!**
-              \n\n📱 **URL:** ${deploymentUrl}
-              \n\nThis preview will be automatically updated when you push new commits to this PR.`
+              repo: context.repo.repo
             });
+            const latestDeployment = deployments[0];
+            if (latestDeployment) {
+              const deploymentUrl = `https://${latestDeployment.environment}.vercel.app`;
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `🚀 **Preview Deployment Ready!**
+                \n\n📱 **URL:** ${deploymentUrl}
+                \n\nThis preview will be automatically updated when you push new commits to this PR.`
+              });
+            }
+          } catch (error) {
+            console.log('Could not post deployment comment:', error.message);
           }
+          
+    - name: Comment PR with build success
+      if: github.event_name == 'pull_request' && steps.check-secrets.outputs.secrets-available == 'false'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `✅ **Build Completed Successfully!**
+            \n\n📦 The application has been built and is ready for deployment.
+            \n\nℹ️ To enable automatic Vercel deployment, configure the following repository secrets:
+            \n- \`VERCEL_TOKEN\`
+            \n- \`VERCEL_ORG_ID\`
+            \n- \`VERCEL_PROJECT_ID\`
+            \n\nYou can manually deploy the built application from the \`dist\` folder.`
+          });
